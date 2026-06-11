@@ -81,16 +81,18 @@ export async function ensureLfsAttributes(): Promise<void> {
   for (const p of s.git.lfsPatterns) {
     lines.add(`${p} filter=lfs diff=lfs merge=lfs -text`);
   }
-  await fs.writeFile(file, [...lines].join('\n') + '\n');
+  // Write a CANONICAL (sorted) .gitattributes so every device/instance produces a
+  // byte-identical file. Otherwise each side rewrites it in a different order and
+  // every sync conflicts on .gitattributes — which silently wedges the repo in an
+  // unfinished merge and stops sync entirely. Only write when content changes.
+  const content = [...lines].sort().join('\n') + '\n';
+  if (content !== existing) await fs.writeFile(file, content);
 
+  // Install the LFS filters locally, but DON'T `git lfs track`: that rewrites
+  // .gitattributes itself (non-deterministically), reintroducing the conflict above.
   if (await lfsAvailable()) {
     const g = await git();
-    try {
-      await g.raw(['lfs', 'install', '--local']);
-      await g.raw(['lfs', 'track', ...s.git.lfsPatterns]);
-    } catch {
-      /* lfs track best-effort */
-    }
+    await g.raw(['lfs', 'install', '--local']).catch(() => {});
   }
 }
 
@@ -207,6 +209,11 @@ export async function pull(): Promise<string> {
   const g = await git();
   await ensureLfsAttributes();
   const s = await getSettings();
+  // Pull must use the authenticated remote too. push() set-urls before pushing but
+  // pull() didn't, so a fresh clone's tokenless origin made pull fail auth → "Pull
+  // skipped" → the subsequent push hit a diverged remote → "fetch first" forever.
+  const remote = await authedRemote();
+  if (remote) await g.remote(['set-url', 'origin', remote]);
   // `--allow-unrelated-histories`: a vault that was `git init`'d locally and a
   // remote that already has commits have no common ancestor; without this, the
   // first pull aborts with "refusing to merge unrelated histories" and sync can
@@ -315,12 +322,54 @@ export function scheduleAutoCommitOnSave(): void {
     try {
       const s = await getSettings();
       if (!s.git.enabled || !s.git.autoCommitOnSave) return;
-      await commitAll();
-      if (s.git.remote) await push().catch(() => {});
+      // Full sync (pull→merge→push), not a bare push: pushing without first
+      // integrating the remote is exactly what left the repo permanently rejected
+      // ("fetch first") once another device had pushed in the meantime.
+      if (s.git.remote) await sync().catch((e) => console.warn('[git] auto-sync failed:', e?.message));
+      else await commitAll();
     } catch (e: any) {
       console.warn('[git] auto-commit failed:', e.message);
     }
   }, 5000);
+}
+
+/** Auto-resolve conflicts in machine-generated files so multi-device sync converges
+ *  without manual intervention: regenerate .gitattributes, keep our copy of Obsidian
+ *  UI state (.obsidian/**). Returns true only if ALL conflicts were resolved. */
+async function resolveNoiseConflicts(g: SimpleGit): Promise<boolean> {
+  const st = await g.status();
+  if (!st.conflicted.length) return true;
+  let remaining = 0;
+  for (const f of st.conflicted) {
+    if (f === '.gitattributes') {
+      await ensureLfsAttributes();
+      await g.add(['.gitattributes']);
+    } else if (f.startsWith('.obsidian/')) {
+      await g.raw(['checkout', '--ours', '--', f]).catch(() => {});
+      await g.add([f]);
+    } else {
+      remaining++;
+    }
+  }
+  return remaining === 0;
+}
+
+/** If a previous sync left an unfinished/conflicted merge, get back to a clean state
+ *  so the next sync isn't permanently stuck on "you have unmerged files". */
+async function recoverMerge(g: SimpleGit): Promise<void> {
+  const root = await getVaultRoot();
+  try {
+    await fs.access(path.join(root, '.git', 'MERGE_HEAD'));
+  } catch {
+    return; // not mid-merge
+  }
+  if (await resolveNoiseConflicts(g)) {
+    await g.raw(['commit', '--no-edit']).catch(() => {});
+  } else {
+    await g.raw(['merge', '--abort']).catch(async () => {
+      await g.raw(['reset', '--merge']).catch(() => {});
+    });
+  }
 }
 
 /** Convenience: stage+commit+pull+push in one go. Reports conflicts. */
@@ -331,15 +380,22 @@ export async function sync(message?: string): Promise<{ ok: boolean; log: string
     await init();
     log.push('Initialized repository');
   }
+  await recoverMerge(g); // unwedge a prior stuck merge before doing anything
   log.push(await commitAll(message || ''));
   try {
     log.push(await pull());
   } catch (e: any) {
-    const st = await g.status();
-    if (st.conflicted.length) {
-      return { ok: false, log: [...log, `Conflicts: ${st.conflicted.join(', ')}`] };
+    // Pull hit a merge conflict. Auto-resolve generated-file noise and finish the
+    // merge; only bail (cleanly, not wedged) if real note conflicts remain.
+    if (await resolveNoiseConflicts(g)) {
+      await g.raw(['commit', '--no-edit']).catch(() => {});
+      if (await lfsAvailable()) await g.raw(['lfs', 'pull']).catch(() => {});
+      log.push('Pulled (auto-resolved generated-file conflicts)');
+    } else {
+      const st = await g.status();
+      await g.raw(['merge', '--abort']).catch(() => {});
+      return { ok: false, log: [...log, `Conflicts need manual resolution: ${st.conflicted.join(', ')}`] };
     }
-    log.push(`Pull skipped: ${e.message}`);
   }
   try {
     log.push(await push());
