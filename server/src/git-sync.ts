@@ -33,43 +33,44 @@ export async function initGitSync() {
   const vaultPath = config.defaultVaultPath;
   console.log(`[Git Sync] Initializing for ${vaultPath}...`);
 
-  // Ensure directory exists
   await fs.mkdir(vaultPath, { recursive: true });
 
   const isRepo = await isGitRepo(vaultPath);
 
+  // Setup config every time just to be safe
+  const setupConfig = async () => {
+    await runGit(`config user.name "${config.gitSyncName}"`, vaultPath);
+    await runGit(`config user.email "${config.gitSyncEmail}"`, vaultPath);
+    await runGit('config pull.rebase false', vaultPath);
+  };
+
   if (!isRepo) {
-    console.log('[Git Sync] Vault is not a Git repository. Attempting to clone...');
-    // We clone into a temporary directory and then move contents, or init & pull to avoid "directory not empty" issues.
+    console.log('[Git Sync] Vault is not a Git repository. Initializing...');
     await runGit('init', vaultPath);
     await runGit(`remote add origin "${config.gitSyncRepo}"`, vaultPath);
+    await setupConfig();
     
-    // Configure user
-    await runGit(`config user.name "${config.gitSyncName}"`, vaultPath);
-    await runGit(`config user.email "${config.gitSyncEmail}"`, vaultPath);
-    
-    const pullResult = await runGit('pull origin main', vaultPath); // Assume main branch
-    if (!pullResult.success) {
-      // Try master if main fails
-      const pullMaster = await runGit('pull origin master', vaultPath);
-      if (!pullMaster.success) {
-         console.warn('[Git Sync] Warning: Could not pull from remote. Remote might be empty or require authentication.');
-         console.warn(pullResult.stderr || pullResult.error?.message);
+    console.log('[Git Sync] Fetching from remote...');
+    await runGit('fetch origin', vaultPath);
+
+    // Try to reset hard to remote main or master to avoid any merge conflicts with local default files
+    const resetMain = await runGit('reset --hard origin/main', vaultPath);
+    if (!resetMain.success) {
+      const resetMaster = await runGit('reset --hard origin/master', vaultPath);
+      if (!resetMaster.success) {
+         console.warn('[Git Sync] Remote might be empty or auth failed. Starting fresh.');
+      } else {
+         await runGit('branch -M master', vaultPath);
       }
     } else {
-      console.log('[Git Sync] Successfully pulled existing vault from Git.');
+      await runGit('branch -M main', vaultPath);
     }
-    
-    // Ensure we are tracking the remote branch correctly
-    await runGit('branch -M main', vaultPath);
-    await runGit('push -u origin main', vaultPath);
   } else {
     console.log('[Git Sync] Vault is already a Git repository. Pulling latest changes...');
-    // Configure user in case it was lost
-    await runGit(`config user.name "${config.gitSyncName}"`, vaultPath);
-    await runGit(`config user.email "${config.gitSyncEmail}"`, vaultPath);
+    await setupConfig();
     
-    const pullResult = await runGit('pull origin main', vaultPath);
+    // We try to pull. If it fails due to divergence, we just warn.
+    const pullResult = await runGit('pull origin', vaultPath);
     if (!pullResult.success) {
        console.warn('[Git Sync] Failed to pull latest changes:', pullResult.stderr || pullResult.error?.message);
     } else {
@@ -94,7 +95,7 @@ export function startGitSyncCron() {
         await runGit('add .', vaultPath);
         const commit = await runGit('commit -m "Auto-sync via WebObsidian"', vaultPath);
         if (commit.success) {
-          const push = await runGit('push origin main', vaultPath);
+          const push = await runGit('push -u origin HEAD', vaultPath);
           if (push.success) {
             console.log('[Git Sync] Successfully pushed changes to GitHub.');
           } else {
