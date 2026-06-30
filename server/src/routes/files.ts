@@ -100,7 +100,16 @@ filesRouter.post(
     // Reuse an existing folder that differs only in case (e.g. an Obsidian vault's
     // "Attachments") instead of creating a duplicate "attachments". See vault.ts.
     const resolvedDir = dir ? await vault.resolveDirCaseInsensitive(dir) : '';
-    const rel = path.posix.join(resolvedDir, file.originalname);
+    let rel = path.posix.join(resolvedDir, file.originalname);
+    
+    // Auto-rename to avoid overwriting existing files (e.g. pasting multiple "image.png")
+    let counter = 1;
+    const parsed = path.parse(file.originalname);
+    while (await vault.exists(rel)) {
+      rel = path.posix.join(resolvedDir, `${parsed.name} ${counter}${parsed.ext}`);
+      counter++;
+    }
+
     await vault.writeFileBuffer(rel, file.buffer);
     res.json({ ok: true, path: rel, size: file.size });
   }),
