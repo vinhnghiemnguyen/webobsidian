@@ -21,6 +21,12 @@ export interface RuntimeConfig {
    * value. Set `TRUST_PROXY=false` for a directly-exposed instance with no proxy.
    */
   trustProxy: boolean | number | string;
+
+  // Git Auto-Sync
+  gitSyncRepo?: string;
+  gitSyncInterval: number; // in milliseconds
+  gitSyncName: string;
+  gitSyncEmail: string;
 }
 
 function resolveRoots(): string[] {
@@ -63,6 +69,12 @@ export const config: RuntimeConfig = {
   initialPassword: process.env.WEBOBSIDIAN_PASSWORD || undefined,
   isProd: process.env.NODE_ENV === 'production',
   trustProxy: resolveTrustProxy(),
+  
+  // Git Auto-Sync Defaults
+  gitSyncRepo: process.env.GIT_SYNC_REPO?.trim() || undefined,
+  gitSyncInterval: Number(process.env.GIT_SYNC_INTERVAL ?? 5) * 60 * 1000, // Default 5 mins
+  gitSyncName: process.env.GIT_SYNC_NAME?.trim() || 'WebObsidian Auto-Sync',
+  gitSyncEmail: process.env.GIT_SYNC_EMAIL?.trim() || 'sync@webobsidian.local',
 };
 
 export const SETTINGS_FILE = path.join(config.dataDir, 'settings.json');

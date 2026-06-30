@@ -12,6 +12,7 @@ import { setupWSConnection } from './y-websocket-utils.cjs';
 import chokidar from 'chokidar';
 
 import { config } from './config.js';
+import { initGitSync, startGitSyncCron } from './git-sync.js';
 import { loadSettings, getSettings, setPasswordIfInitial } from './bootstrap.js';
 import { errorHandler } from './middleware/error.js';
 import { COOKIE_NAME } from './middleware/auth.js';
@@ -48,6 +49,7 @@ process.on('unhandledRejection', (reason) => {
 async function main() {
   await loadSettings();
   await setPasswordIfInitial();
+  await initGitSync();
   await ensureVault();
 
   const app = express();
@@ -144,9 +146,10 @@ async function main() {
   startAutoSync();
 
   server.listen(config.port, config.host, () => {
-    console.log(`\n  WebObsidian server → http://${config.host}:${config.port}`);
+    console.log(`\n  WebObsidian server -> http://${config.host}:${config.port}`);
     console.log(`  Vault: ${config.defaultVaultPath}`);
     console.log(`  Data:  ${config.dataDir}\n`);
+    startGitSyncCron();
   });
 }
 
