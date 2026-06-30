@@ -1,4 +1,7 @@
 import { useEffect, useRef } from 'react';
+import * as Y from 'yjs';
+import { yCollab } from 'y-codemirror.next';
+import { WebsocketProvider } from 'y-websocket';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap, highlightActiveLine, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
@@ -233,20 +236,40 @@ export default function Editor() {
       ],
     });
   };
+  const initialSyncDone = useRef(false);
 
   // (Re)create the view when the active file changes.
   useEffect(() => {
     if (!host.current) return;
     view.current?.destroy();
+    initialSyncDone.current = false;
 
     const isMd = activePath ? /\.(md|markdown)$/i.test(activePath) : false;
     // Place the caret after the frontmatter so Properties render immediately.
     const fmMatch = isMd ? content.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/) : null;
     const initPos = Math.min(fmMatch ? fmMatch[0].length : 0, content.length);
+    // Real-time collab setup
+    const ydoc = new Y.Doc();
+    const ytext = ydoc.getText('codemirror');
+    const username = 'User-' + Math.floor(Math.random() * 1000);
+    const userColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+
+    const wsUrl = window.location.protocol.replace('http', 'ws') + '//' + window.location.host + '/ws/yjs';
+    // Connect to the room matching the activePath (base64 encoded to avoid path issues)
+    const roomName = activePath ? btoa(unescape(encodeURIComponent(activePath))) : 'default';
+    const provider = new WebsocketProvider(wsUrl, roomName, ydoc);
+
+    provider.awareness.setLocalStateField('user', {
+      name: username,
+      color: userColor,
+      colorLight: userColor + '33'
+    });
+
     const state = EditorState.create({
-      doc: content,
-      selection: { anchor: initPos },
+      doc: '', // Start empty, wait for Yjs to sync
+      selection: { anchor: 0 },
       extensions: [
+        yCollab(ytext, provider.awareness),
         history(),
         drawSelection(),
         highlightActiveLine(),
@@ -299,22 +322,39 @@ export default function Editor() {
     view.current = v;
     setActiveEditor(v);
     v.focus();
+    
+    // Once synced, if the Yjs document is empty, we are the first client to join the room.
+    const handleSync = (isSynced: boolean) => {
+      if (isSynced && !initialSyncDone.current) {
+        initialSyncDone.current = true;
+        if (ytext.toString() === '') {
+          ytext.insert(0, content);
+        }
+      }
+    };
+    provider.on('sync', handleSync);
+
     return () => {
+      provider.off('sync', handleSync);
+      provider.destroy();
+      ydoc.destroy();
       setActiveEditor(null);
       v.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath]);
 
-  // Sync the editor doc when `content` changes from OUTSIDE the editor — e.g. the
-  // active note's content arrives asynchronously after reload/hydrate, or is
-  // pushed by cross-tab sync. (User typing changes content too, but then the doc
-  // already equals content, so this is a no-op.)
+  // Sync the editor doc when `content` changes from OUTSIDE the editor
   useEffect(() => {
     const v = view.current;
     if (!v) return;
+    
     const current = v.state.doc.toString();
     if (current === content) return;
+    
+    // We must NOT inject the content if the editor is just starting up and waiting for Yjs.
+    if (!initialSyncDone.current) return;
+
     applyingExternal.current = true;
     const fmMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/);
     const initPos = Math.min(fmMatch ? fmMatch[0].length : 0, content.length);

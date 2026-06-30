@@ -10,7 +10,7 @@ import Icon from './Icon';
 import StatusBar from './StatusBar';
 import FormatToolbar from './FormatToolbar';
 import { useIsMobile } from '../lib/useIsMobile';
-import { editorFind, getActiveEditor } from '../lib/activeEditor';
+import { editorFind, getActiveEditor, fmtInsert } from '../lib/activeEditor';
 import { triggerAddProperty } from '../lib/livePreview';
 import { pathToUrl } from '../lib/urlsync';
 import { VIDEO_EXT_RE, AUDIO_EXT_RE } from '../lib/media';
@@ -259,13 +259,20 @@ export default function Workspace() {
     openContextMenu({ x: Math.round(rect.right) - 220, y: Math.round(rect.bottom) + 6, items });
   };
 
-  // Paste / drop image → upload to attachments and insert an embed.
+  // Paste / drop image -> upload to attachments and insert an embed.
+
   const handleFiles = async (files: FileList | File[]) => {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith('image/')) continue;
       try {
         const { path } = await api.upload(file);
-        setContent(`${content}\n![[${path}]]\n`);
+        const imgText = `![[${path}]]\n`;
+        const editor = getActiveEditor();
+        if (editor) {
+          fmtInsert(imgText);
+        } else {
+          setContent(`${content}\n${imgText}`);
+        }
         notify(`Inserted ${path}`);
       } catch (e: any) {
         notify(e.message);

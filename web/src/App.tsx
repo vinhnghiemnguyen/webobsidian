@@ -81,8 +81,8 @@ export default function App() {
           window.clearTimeout(treeTimer);
           treeTimer = window.setTimeout(() => loadTree(), 800);
         } else if (msg.type === 'uistate') {
-          // another tab/device changed the workspace → sync live
-          useStore.getState().applyRemoteState(msg.state, msg.originId);
+          // Disable UI state forced syncing to allow testing collaboration in different files!
+          // useStore.getState().applyRemoteState(msg.state, msg.originId);
         }
       } catch {
         /* ignore */

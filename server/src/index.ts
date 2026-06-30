@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
+import { setupWSConnection } from './y-websocket-utils.cjs';
 import chokidar from 'chokidar';
 
 import { config } from './config.js';
@@ -154,6 +155,7 @@ async function main() {
 // files), so the upgrade is rejected unless the request carries a valid session.
 function setupWebsocket(server: http.Server) {
   const wss = new WebSocketServer({ noServer: true });
+  const wssYjs = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
     let pathname = '';
@@ -162,10 +164,12 @@ function setupWebsocket(server: http.Server) {
     } catch {
       pathname = '';
     }
-    if (pathname !== '/ws') {
+    
+    if (pathname !== '/ws' && !pathname.startsWith('/ws/yjs')) {
       socket.destroy();
       return;
     }
+    
     const token = cookieValue(req.headers.cookie, COOKIE_NAME) ?? bearerToken(req.headers.authorization);
     void (async () => {
       if (!token || !(await verifyToken(token))) {
@@ -173,13 +177,23 @@ function setupWebsocket(server: http.Server) {
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      
+      if (pathname === '/ws') {
+        wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      } else if (pathname.startsWith('/ws/yjs')) {
+        wssYjs.handleUpgrade(req, socket, head, (ws) => wssYjs.emit('connection', ws, req));
+      }
     })();
   });
 
   wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'hello' }));
   });
+  
+  wssYjs.on('connection', setupWSConnection);
+
+
+
   setBroadcaster((msg) => {
     const data = JSON.stringify(msg);
     for (const client of wss.clients) {

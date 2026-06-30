@@ -17,3 +17,5 @@ desktop/release/
 # Local agent runbooks/skills — may contain server creds; never commit.
 .claude/skills/
 report.md
+server/sample-vault/
+*.tmp-*
