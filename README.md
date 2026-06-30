@@ -140,6 +140,35 @@ raise it to `8192` for very large vaults (e.g. 6k+ notes / multi-GB).
 
 ---
 
+## ☁️ Deployment on Render (Free Tier)
+
+Since Render's Free Tier uses ephemeral storage (files are wiped when the server sleeps), WebObsidian includes a **Git Auto-Sync** feature. This ensures your vault and settings are safely stored in a private GitHub repository and automatically restored on boot.
+
+### 1. Setup GitHub Private Repository & Token
+1. Create a new **Private** repository on GitHub to store your notes.
+2. Go to **Settings -> Developer settings -> Personal access tokens -> Tokens (classic)**.
+3. Click **Generate new token (classic)**, set Expiration to **No expiration**, and check the **repo** scope.
+4. Copy the generated token (e.g., `ghp_12345...`).
+
+### 2. Deploy to Render
+1. Create a new **Web Service** on Render and connect it to your fork of the WebObsidian repository.
+2. Choose **Docker** as the runtime environment.
+3. Go to the **Environment** tab and add the following variables:
+
+| Variable | Example Value | Description |
+|---|---|---|
+| `WEBOBSIDIAN_PASSWORD` | `my-secure-password` | Automatically configures your master password on every boot. |
+| `GIT_SYNC_REPO` | `https://<TOKEN>@github.com/<USER>/<REPO>.git` | Your private repo URL with the PAT embedded for authentication. |
+| `GIT_SYNC_INTERVAL` | `5` | (Optional) Auto-sync frequency in minutes. Default: `5`. |
+| `GIT_SYNC_NAME` | `WebObsidian Sync` | (Optional) Git commit author name. |
+
+### How it works
+- On startup, the server clones your vault from GitHub.
+- Every `GIT_SYNC_INTERVAL` minutes, it automatically commits and pushes your changes back to GitHub.
+- When Render puts the instance to sleep, you lose nothing. The next time it wakes up, it pulls the latest state from GitHub again.
+
+---
+
 ## 💻 Local development
 
 Requires **Node ≥ 20** and `git` (+ `git-lfs` if you use LFS).
